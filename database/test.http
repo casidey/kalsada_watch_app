@@ -1,0 +1,22 @@
+### Optional quick test (slide 46). Works with the VS Code "REST Client" extension
+### or the .http support in Visual Studio / Rider. Fill in your own values first.
+### Do NOT commit a real key into this file.
+
+@url = https://YOUR-REF.supabase.co
+@key = sb_publishable_...
+
+### 1. All reports. If this returns JSON rows, the database side works.
+GET {{url}}/rest/v1/hazard_reports?select=ticket_number,status,location_landmark
+apikey: {{key}}
+
+### 2. Same filter the Verify page sends for "Under Inspection" (done by the database)
+GET {{url}}/rest/v1/hazard_reports?select=ticket_number,status&deleted_at=is.null&status=in.(submitted,under_inspection)
+apikey: {{key}}
+
+### 3. Status counts view
+GET {{url}}/rest/v1/hazard_report_status_counts?select=*
+apikey: {{key}}
+
+### 4. History of one report
+GET {{url}}/rest/v1/status_updates?select=status,note,updated_at&hazard_report_id=eq.1&order=updated_at
+apikey: {{key}}

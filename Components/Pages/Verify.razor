@@ -1,7 +1,14 @@
 @page "/verify"
 @page "/map"
 @rendermode InteractiveServer
+@using KalsadaWatchApp.Models
+@using KalsadaWatchApp.Models.Enums
+@using KalsadaWatchApp.Services
+@using static KalsadaWatchApp.Services.ReportDisplay
 @inject IJSRuntime JSRuntime
+@inject HazardReportService Reports
+@inject PersistentComponentState AppState
+@implements IDisposable
 
 <PageTitle>KalsadaWatch - Road Status Verification & Damage Heat Map</PageTitle>
 
@@ -119,14 +126,15 @@
         <!-- Search Input -->
         <div class="relative flex-1 max-w-md">
           <span class="material-symbols-outlined absolute left-3.5 top-3 text-slate-400 text-lg">search</span>
-          <input type="text" 
-                 @bind="searchQuery" 
-                 @bind:event="oninput" 
-                 placeholder="Search by road name, landmark, or ID..." 
+          @* Searches the database when you press Enter or leave the box, not on every keystroke. *@
+          <input type="text"
+                 @bind="searchQuery"
+                 @bind:after="ReloadReportsAsync"
+                 placeholder="Search by road name, landmark, or ID..."
                  class="w-full pl-10 pr-10 py-2.5 rounded-xl border border-civic-border bg-white text-sm text-civic-title placeholder:text-slate-400 focus:outline-none focus:border-civic-primary focus:ring-2 focus:ring-civic-primary/15 transition-all shadow-sm" />
           @if (!string.IsNullOrEmpty(searchQuery))
           {
-            <button @onclick='() => searchQuery = ""' class="material-symbols-outlined absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 text-lg">
+            <button @onclick="ClearSearch" class="material-symbols-outlined absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 text-lg">
               close
             </button>
           }
@@ -136,7 +144,7 @@
         <div class="flex flex-wrap items-center gap-2">
           <button @onclick='() => SetStatusFilter("All")' 
                   class="px-4 py-2 rounded-xl text-xs font-semibold transition-all @(selectedStatus == "All" ? "bg-civic-primary text-white shadow-sm" : "bg-white border border-civic-border text-civic-muted hover:text-civic-title hover:border-civic-primary/40")">
-            All Statuses (@allReports.Count)
+            All Statuses (@totalCount)
           </button>
           <button @onclick='() => SetStatusFilter("Under Construction")' 
                   class="px-4 py-2 rounded-xl text-xs font-semibold transition-all @(selectedStatus == "Under Construction" ? "bg-amber-500 text-white shadow-sm" : "bg-white border border-civic-border text-amber-700 hover:bg-amber-50")">
@@ -156,20 +164,19 @@
         <div class="flex items-center gap-3">
           <!-- District Dropdown -->
           <div class="relative">
-            <select @bind="selectedDistrict" class="px-3.5 pr-8 py-2 rounded-xl bg-white border border-civic-border text-xs font-semibold text-civic-title focus:outline-none focus:border-civic-primary focus:ring-2 focus:ring-civic-primary/15 appearance-none cursor-pointer shadow-sm">
+            <select @bind="selectedDistrict" @bind:after="ReloadReportsAsync" class="px-3.5 pr-8 py-2 rounded-xl bg-white border border-civic-border text-xs font-semibold text-civic-title focus:outline-none focus:border-civic-primary focus:ring-2 focus:ring-civic-primary/15 appearance-none cursor-pointer shadow-sm">
               <option value="All">All Districts</option>
-              <option value="Central District">Central District</option>
-              <option value="North District">North District</option>
-              <option value="South Urban Corridor">South Corridor</option>
-              <option value="East Industrial Zone">East Industrial</option>
-              <option value="West Municipal Area">West Municipal</option>
+              @foreach (var district in districts)
+              {
+                <option value="@district.Id">@district.Name</option>
+              }
             </select>
             <span class="material-symbols-outlined absolute right-2.5 top-2 text-slate-400 text-base pointer-events-none">expand_more</span>
           </div>
 
           <!-- Sort Dropdown (Near area / Recently added) -->
           <div class="relative">
-            <select @bind="selectedSort" class="px-3.5 pr-8 py-2 rounded-xl bg-white border border-civic-border text-xs font-semibold text-civic-title focus:outline-none focus:border-civic-primary focus:ring-2 focus:ring-civic-primary/15 appearance-none cursor-pointer shadow-sm">
+            <select @bind="selectedSort" @bind:after="ReloadReportsAsync" class="px-3.5 pr-8 py-2 rounded-xl bg-white border border-civic-border text-xs font-semibold text-civic-title focus:outline-none focus:border-civic-primary focus:ring-2 focus:ring-civic-primary/15 appearance-none cursor-pointer shadow-sm">
               <option value="recent">⚡ Recently Added</option>
               <option value="near">📍 Near City Center</option>
               <option value="priority">🚨 Highest Priority</option>
@@ -255,7 +262,20 @@
 
         <!-- Scrollable Report Cards List -->
         <div class="space-y-3.5 max-h-[600px] overflow-y-auto pr-1">
-          @if (FilteredReports.Count == 0)
+          @if (errorMessage is not null)
+          {
+            <div class="bg-red-50 rounded-2xl border border-red-200 p-5 text-xs text-red-800" role="alert">
+              <strong class="block text-sm font-bold mb-1">Could not load road reports</strong>
+              <span>@errorMessage</span>
+            </div>
+          }
+          else if (isLoading && FilteredReports.Count == 0)
+          {
+            <div class="bg-white rounded-2xl border border-civic-border p-12 text-center text-xs text-civic-muted">
+              Loading road reports…
+            </div>
+          }
+          else if (FilteredReports.Count == 0)
           {
             <div class="bg-white rounded-2xl border border-civic-border p-12 text-center">
               <div class="w-12 h-12 rounded-full bg-civic-light text-civic-primary flex items-center justify-center mx-auto mb-3">
@@ -281,7 +301,7 @@
                   @if (report.Status == "Under Construction")
                   {
                     <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-800 border border-amber-200">
-                      <span class="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span> Under Construction (@report.ProgressPercent%)
+                      <span class="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span> Under Construction
                     </span>
                   }
                   else if (report.Status == "Finished")
@@ -309,7 +329,9 @@
                   <span>@report.Location</span>
                 </div>
 
-                <!-- Progress Bar -->
+                <!-- Progress Bar (only when progress is known; crew progress tracking comes later) -->
+                @if (report.ProgressPercent is not null)
+                {
                 <div class="mt-3.5 space-y-1">
                   <div class="flex items-center justify-between text-[11px]">
                     <span class="text-civic-muted font-medium">Asphalt Repair Progress</span>
@@ -322,11 +344,12 @@
                          style="width: @(report.ProgressPercent)%"></div>
                   </div>
                 </div>
+                }
 
                 <!-- Meta Footer: Crew & Actions -->
                 <div class="flex items-center justify-between pt-3 mt-3 border-t border-slate-100 text-xs">
                   <div class="text-[11px] text-civic-muted">
-                    <span class="block font-medium text-slate-700">@report.AssignedCrew</span>
+                    <span class="block font-medium text-slate-700">@report.Severity priority</span>
                     <span>@report.District &bull; @report.DateReported</span>
                   </div>
 
@@ -359,7 +382,7 @@
   @if (isModalOpen && selectedReport != null)
   {
     <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in" @onclick="CloseAuditModal">
-      <div class="bg-white rounded-3xl border border-civic-border max-w-lg w-full p-6 sm:p-8 shadow-2xl space-y-6 relative" @onclick:stopPropagation>
+      <div class="bg-white rounded-3xl border border-civic-border max-w-lg w-full max-h-[90vh] overflow-y-auto p-6 sm:p-8 shadow-2xl space-y-6 relative" @onclick:stopPropagation>
         
         <!-- Modal Close Button -->
         <button @onclick="CloseAuditModal" class="absolute top-5 right-5 w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center transition-colors">
@@ -382,13 +405,16 @@
           <div class="flex items-center justify-between text-xs">
             <span class="text-civic-muted">Current Civic Status</span>
             <span class="font-bold @(selectedReport.Status == "Finished" ? "text-emerald-700" : selectedReport.Status == "Under Construction" ? "text-amber-700" : "text-blue-700")">
-              @selectedReport.Status (@selectedReport.ProgressPercent%)
+              @(selectedReport.Status + (selectedReport.ProgressPercent is int percent ? $" ({percent}%)" : ""))
             </span>
           </div>
+          @if (selectedReport.ProgressPercent is not null)
+          {
           <div class="w-full h-2.5 rounded-full bg-slate-200 overflow-hidden">
             <div class="h-full rounded-full @(selectedReport.Status == "Finished" ? "bg-emerald-500" : selectedReport.Status == "Under Construction" ? "bg-amber-500" : "bg-blue-500")"
                  style="width: @(selectedReport.ProgressPercent)%"></div>
           </div>
+          }
           <div class="flex items-center justify-between text-[11px] text-civic-muted pt-1">
             <span>Reported: @selectedReport.DateReported</span>
             <span>@(selectedReport.Status == "Finished" ? $"Completed: {selectedReport.CompletionDate}" : $"Target: {selectedReport.CompletionDate}")</span>
@@ -398,16 +424,16 @@
         <!-- Technical Field Inspection Specifications -->
         <div class="grid grid-cols-2 gap-3 text-xs">
           <div class="p-3 rounded-xl bg-slate-50 border border-slate-200">
-            <span class="block text-[11px] text-civic-muted mb-0.5">Assigned Engineering Crew</span>
-            <strong class="text-civic-title font-semibold">@selectedReport.AssignedCrew</strong>
+            <span class="block text-[11px] text-civic-muted mb-0.5">Hazard Type</span>
+            <strong class="text-civic-title font-semibold">@selectedReport.HazardType</strong>
           </div>
           <div class="p-3 rounded-xl bg-slate-50 border border-slate-200">
             <span class="block text-[11px] text-civic-muted mb-0.5">Hazard Severity Rating</span>
             <strong class="text-civic-title font-semibold">@selectedReport.Severity Priority</strong>
           </div>
           <div class="p-3 rounded-xl bg-slate-50 border border-slate-200">
-            <span class="block text-[11px] text-civic-muted mb-0.5">Citizen Confirmations</span>
-            <strong class="text-emerald-700 font-semibold">@selectedReport.CitizenVerifications Citizens Verified</strong>
+            <span class="block text-[11px] text-civic-muted mb-0.5">Reported On</span>
+            <strong class="text-civic-title font-semibold">@selectedReport.ReportedOn</strong>
           </div>
           <div class="p-3 rounded-xl bg-slate-50 border border-slate-200">
             <span class="block text-[11px] text-civic-muted mb-0.5">Ticket Reference ID</span>
@@ -415,12 +441,65 @@
           </div>
         </div>
 
+        <!-- Citizen Photos (files in Supabase Storage, listed in report_photos) -->
+        @if (photosForReport is { Count: > 0 })
+        {
+          <div class="text-xs">
+            <span class="block font-bold text-civic-title mb-2">Photos (@photosForReport.Count):</span>
+            <div class="grid grid-cols-3 gap-2">
+              @foreach (var photo in photosForReport)
+              {
+                <a href="@photo.ImageUrl" target="_blank" rel="noopener" title="Open full-size photo">
+                  <img src="@photo.ImageUrl" alt="Photo of report #@selectedReport.Id" loading="lazy"
+                       class="w-full h-24 object-cover rounded-xl border border-slate-200 hover:opacity-90 transition-opacity" />
+                </a>
+              }
+            </div>
+          </div>
+        }
+
         <!-- Field Engineer Notes -->
         <div class="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs">
           <span class="block font-bold text-civic-title mb-1">Public Works Inspection Notes:</span>
           <p class="text-civic-muted leading-relaxed">
             @selectedReport.Notes
           </p>
+        </div>
+
+        <!-- Status History (read from the status_updates history table) -->
+        <div class="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs">
+          <span class="block font-bold text-civic-title mb-2">Status History:</span>
+          @if (historyError is not null)
+          {
+            <p class="text-red-700">Could not load the history: @historyError</p>
+          }
+          else if (history is null)
+          {
+            <p class="text-civic-muted">Loading history…</p>
+          }
+          else if (history.Count == 0)
+          {
+            <p class="text-civic-muted">No status changes recorded yet.</p>
+          }
+          else
+          {
+            <ol class="space-y-2 max-h-40 overflow-y-auto pr-1">
+              @foreach (var entry in history)
+              {
+                <li class="flex gap-2">
+                  <span class="w-2 h-2 mt-1 shrink-0 rounded-full bg-civic-primary"></span>
+                  <div>
+                    <span class="font-semibold text-civic-title">@StatusLabel(entry.Status)</span>
+                    <span class="text-slate-400"> &bull; @FormatLocal(entry.UpdatedAt)</span>
+                    @if (!string.IsNullOrWhiteSpace(entry.Note))
+                    {
+                      <span class="block text-civic-muted">@entry.Note</span>
+                    }
+                  </div>
+                </li>
+              }
+            </ol>
+          }
         </div>
 
         <!-- Modal Actions -->
@@ -440,6 +519,10 @@
 </div>
 
 @code {
+    // City center used by the "Near City Center" sort (the same point the map's Center button flies to).
+    private const double CenterLat = 14.5995;
+    private const double CenterLng = 120.9842;
+
     private string selectedStatus = "All";
     private string selectedDistrict = "All";
     private string selectedSort = "recent";
@@ -447,229 +530,217 @@
     private bool isHeatmapActive = false;
     private bool isModalOpen = false;
     private RoadReport? selectedReport;
+    private List<StatusUpdate>? history;
+    private string? historyError;
+    private List<ReportPhoto>? photosForReport;
 
+    private const string StateKey = "verify-page";
+    private PersistingComponentStateSubscription persistSubscription;
+    private PageData? initialData; // kept so the first load can be handed from prerendering to the live page
+
+    private List<District> districts = new();
+    private Dictionary<ReportStatus, int> statusCounts = new();
+    private List<RoadReport> FilteredReports { get; set; } = new();
+    private bool isLoading = true;
+    private string? errorMessage;
+    private bool isMapReady;
+    private int loadVersion; // lets an older response that arrives late be ignored
+
+    /// <summary>What a report card and a map pin show. Built from a HazardReport row.</summary>
     private class RoadReport
     {
-        public string Id { get; set; } = "";
+        public long DbId { get; set; }
+        public string Id { get; set; } = "";        // ticket number, e.g. "KW-8921"
         public string Title { get; set; } = "";
         public string Location { get; set; } = "";
         public string District { get; set; } = "";
         public string HazardType { get; set; } = "";
-        public string Severity { get; set; } = "";
-        public string Status { get; set; } = ""; // "Under Construction", "Finished", "Under Inspection"
-        public int ProgressPercent { get; set; }
-        public string AssignedCrew { get; set; } = "";
-        public string DateReported { get; set; } = "";
+        public string Severity { get; set; } = "";  // "High", "Medium", "Low" (the heat map reads this)
+        public string Status { get; set; } = "";    // "Under Construction", "Finished", "Under Inspection"
+        public int? ProgressPercent { get; set; }   // only known for finished repairs until crews are tracked
+        public string DateReported { get; set; } = "";  // e.g. "2 hours ago"
+        public string ReportedOn { get; set; } = "";    // e.g. "Nov 19, 3:50 PM"
         public string CompletionDate { get; set; } = "";
-        public int CitizenVerifications { get; set; }
-        public double Lat { get; set; }
-        public double Lng { get; set; }
-        public double DistanceFromCenterKm { get; set; }
+        public double? Lat { get; set; }
+        public double? Lng { get; set; }
+        public double? DistanceFromCenterKm { get; set; }
         public string Notes { get; set; } = "";
     }
 
-    private List<RoadReport> allReports = new()
+    private int underConstructionCount => CountOf(ReportStatus.UnderConstruction);
+    private int finishedCount => CountOf(ReportStatus.Repaired);
+    private int underInspectionCount => CountOf(ReportStatus.Submitted) + CountOf(ReportStatus.UnderInspection);
+    private int totalCount => underConstructionCount + finishedCount + underInspectionCount;
+    private int CountOf(ReportStatus status) => statusCounts.GetValueOrDefault(status);
+
+    /// <summary>Everything the page needs on first load.</summary>
+    private sealed class PageData
     {
-        new RoadReport
+        public List<District> Districts { get; set; } = new();
+        public List<ReportStatusCount> Counts { get; set; } = new();
+        public List<HazardReport> Reports { get; set; } = new();
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        // The page is drawn twice: once on the server (prerendering) and once when it goes live.
+        // The first pass saves its data here so the second pass does not query Supabase again.
+        persistSubscription = AppState.RegisterOnPersisting(SaveInitialData);
+
+        try
         {
-            Id = "KW-8921",
-            Title = "Deep Pothole (12-inch Cavity)",
-            Location = "18 Market Street / Central Blvd",
-            District = "Central District",
-            HazardType = "Deep Pothole",
-            Severity = "High",
-            Status = "Under Construction",
-            ProgressPercent = 65,
-            AssignedCrew = "Rapid Asphalt Unit 02",
-            DateReported = "2 hours ago",
-            CompletionDate = "Today 5:00 PM",
-            CitizenVerifications = 42,
-            Lat = 14.5995,
-            Lng = 120.9842,
-            DistanceFromCenterKm = 0.4,
-            Notes = "Sub-base graded and asphalt hotmix compaction in progress. Lane divider cones deployed for commuter safety."
-        },
-        new RoadReport
-        {
-            Id = "KW-8910",
-            Title = "Hotmix Patching & Resurfacing Completed",
-            Location = "South Expressway Service Road",
-            District = "South Urban Corridor",
-            HazardType = "Asphalt Degradation",
-            Severity = "Medium",
-            Status = "Finished",
-            ProgressPercent = 100,
-            AssignedCrew = "Arterial Road Division Unit 01",
-            DateReported = "Yesterday",
-            CompletionDate = "Today 1:15 PM",
-            CitizenVerifications = 89,
-            Lat = 14.5820,
-            Lng = 120.9950,
-            DistanceFromCenterKm = 2.1,
-            Notes = "Complete 40-meter resurfacing completed. Passed quality grade density test. Official DPWH audit completed and approved."
-        },
-        new RoadReport
-        {
-            Id = "KW-8924",
-            Title = "Alligator Cracking & Road Cavity",
-            Location = "45 Northway Highway near Overpass",
-            District = "North District",
-            HazardType = "Alligator Cracks",
-            Severity = "High",
-            Status = "Under Construction",
-            ProgressPercent = 40,
-            AssignedCrew = "Heavy Paving Battalion 03",
-            DateReported = "5 hours ago",
-            CompletionDate = "Tomorrow 10:00 AM",
-            CitizenVerifications = 63,
-            Lat = 14.6150,
-            Lng = 120.9890,
-            DistanceFromCenterKm = 1.8,
-            Notes = "Crack milling complete. Base reinforcement gravel applied. Waiting for hotmix delivery convoy."
-        },
-        new RoadReport
-        {
-            Id = "KW-8930",
-            Title = "Collapsed Manhole & Shoulder Cavity",
-            Location = "Corner Industrial Ave & 8th St",
-            District = "East Industrial Zone",
-            HazardType = "Manhole Collapse",
-            Severity = "High",
-            Status = "Under Inspection",
-            ProgressPercent = 15,
-            AssignedCrew = "Drainage & Sewerage Engineering",
-            DateReported = "30 mins ago",
-            CompletionDate = "Inspection in Progress",
-            CitizenVerifications = 21,
-            Lat = 14.5930,
-            Lng = 121.0180,
-            DistanceFromCenterKm = 3.6,
-            Notes = "Site secured with barricades. Drainage structural engineer en route to verify underground culvert integrity."
-        },
-        new RoadReport
-        {
-            Id = "KW-8902",
-            Title = "Pedestrian Crossing Pavement Resurfaced",
-            Location = "Rizal Avenue in front of Civic Center",
-            District = "Central District",
-            HazardType = "Surface Erosion",
-            Severity = "Low",
-            Status = "Finished",
-            ProgressPercent = 100,
-            AssignedCrew = "Central Maintenance Division",
-            DateReported = "3 days ago",
-            CompletionDate = "Yesterday 4:00 PM",
-            CitizenVerifications = 112,
-            Lat = 14.6040,
-            Lng = 120.9820,
-            DistanceFromCenterKm = 0.6,
-            Notes = "Full road smoothing and thermal plastic reflective pedestrian stripes repainted. Fully open to vehicular traffic."
-        },
-        new RoadReport
-        {
-            Id = "KW-8935",
-            Title = "Severe Road Shoulder Depression",
-            Location = "West Coastal Access Road km 12",
-            District = "West Municipal Area",
-            HazardType = "Shoulder Cavity",
-            Severity = "Medium",
-            Status = "Under Inspection",
-            ProgressPercent = 20,
-            AssignedCrew = "District Engineering Survey Team",
-            DateReported = "1 hour ago",
-            CompletionDate = "Scheduled Today 3:00 PM",
-            CitizenVerifications = 17,
-            Lat = 14.5880,
-            Lng = 120.9680,
-            DistanceFromCenterKm = 2.8,
-            Notes = "Road shoulder depression logged by patrol unit. Soil compaction inspection scheduled before patching."
-        },
-        new RoadReport
-        {
-            Id = "KW-8898",
-            Title = "Deep Stormwater Pothole Repaired",
-            Location = "Quezon Blvd Intersection",
-            District = "North District",
-            HazardType = "Deep Pothole",
-            Severity = "High",
-            Status = "Finished",
-            ProgressPercent = 100,
-            AssignedCrew = "Rapid Asphalt Unit 01",
-            DateReported = "2 days ago",
-            CompletionDate = "Yesterday 11:30 AM",
-            CitizenVerifications = 76,
-            Lat = 14.6100,
-            Lng = 120.9850,
-            DistanceFromCenterKm = 1.2,
-            Notes = "Cavity filled with rapid-setting asphalt concrete. Water barrier drainage test passed."
+            if (!AppState.TryTakeFromJson<PageData>(StateKey, out var data) || data is null)
+            {
+                // Three small requests, sent at the same time.
+                var districtsTask = Reports.GetDistrictsAsync();
+                var countsTask = Reports.GetStatusCountsAsync();
+                var reportsTask = Reports.GetReportsAsync(HazardReportService.PublicStatuses, null, null, ReportSort.Newest);
+                await Task.WhenAll(districtsTask, countsTask, reportsTask);
+                data = new PageData { Districts = districtsTask.Result, Counts = countsTask.Result, Reports = reportsTask.Result };
+            }
+
+            initialData = data;
+            districts = data.Districts;
+            statusCounts = data.Counts.ToDictionary(row => row.Status, row => row.Total);
+            FilteredReports = SortForDisplay(data.Reports.Select(ToRoadReport));
         }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private Task SaveInitialData()
+    {
+        if (initialData is not null)
+            AppState.PersistAsJson(StateKey, initialData);
+        return Task.CompletedTask;
+    }
+
+    public void Dispose() => persistSubscription.Dispose();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await JSRuntime.InvokeVoidAsync("kalsadaMap.init", "verificationMap", MapJson());
+            isMapReady = true;
+        }
+    }
+
+    /// <summary>Asks the database again with the current filters. Called whenever a filter changes.</summary>
+    private async Task ReloadReportsAsync()
+    {
+        var version = ++loadVersion;
+        isLoading = true;
+        errorMessage = null;
+
+        try
+        {
+            var sort = selectedSort == "priority" ? ReportSort.HighestPriority : ReportSort.Newest;
+            var rows = await Reports.GetReportsAsync(SelectedStatuses(), SelectedDistrictId(), searchQuery, sort);
+            if (version != loadVersion) return;
+            FilteredReports = SortForDisplay(rows.Select(ToRoadReport));
+        }
+        catch (Exception ex)
+        {
+            if (version != loadVersion) return;
+            errorMessage = ex.Message;
+            FilteredReports = new();
+        }
+        finally
+        {
+            if (version == loadVersion) isLoading = false;
+        }
+
+        await PushMapDataAsync();
+    }
+
+    private IReadOnlyCollection<ReportStatus> SelectedStatuses() => selectedStatus switch
+    {
+        "Under Construction" => new[] { ReportStatus.UnderConstruction },
+        "Finished" => new[] { ReportStatus.Repaired },
+        "Under Inspection" => new[] { ReportStatus.Submitted, ReportStatus.UnderInspection },
+        _ => HazardReportService.PublicStatuses
     };
 
-    private int underConstructionCount => allReports.Count(r => r.Status == "Under Construction");
-    private int finishedCount => allReports.Count(r => r.Status == "Finished");
-    private int underInspectionCount => allReports.Count(r => r.Status == "Under Inspection");
+    private long? SelectedDistrictId() => long.TryParse(selectedDistrict, out var id) ? id : null;
 
-    private List<RoadReport> FilteredReports
-    {
-        get
-        {
-            var query = allReports.AsEnumerable();
+    // "Near City Center" is worked out here from each report's coordinates.
+    // The database already returned the rows filtered and in date or priority order.
+    private List<RoadReport> SortForDisplay(IEnumerable<RoadReport> reports)
+        => selectedSort == "near"
+            ? reports.OrderBy(r => r.DistanceFromCenterKm ?? double.MaxValue).ToList()
+            : reports.ToList();
 
-            if (selectedStatus != "All")
-            {
-                query = query.Where(r => r.Status == selectedStatus);
-            }
-
-            if (selectedDistrict != "All")
-            {
-                query = query.Where(r => r.District == selectedDistrict);
-            }
-
-            if (!string.IsNullOrWhiteSpace(searchQuery))
-            {
-                var q = searchQuery.Trim().ToLowerInvariant();
-                query = query.Where(r => r.Title.ToLowerInvariant().Contains(q) ||
-                                         r.Location.ToLowerInvariant().Contains(q) ||
-                                         r.Id.ToLowerInvariant().Contains(q) ||
-                                         r.HazardType.ToLowerInvariant().Contains(q));
-            }
-
-            query = selectedSort switch
-            {
-                "near" => query.OrderBy(r => r.DistanceFromCenterKm),
-                "priority" => query.OrderByDescending(r => r.Severity == "High").ThenByDescending(r => r.Severity == "Medium"),
-                _ => query.OrderBy(r => r.Status == "Under Construction" ? 0 : r.Status == "Under Inspection" ? 1 : 2)
-            };
-
-            return query.ToList();
-        }
-    }
-
-    private void SetStatusFilter(string status)
+    private async Task SetStatusFilter(string status)
     {
         selectedStatus = status;
-        UpdateMapLayers();
+        await ReloadReportsAsync();
     }
 
-    private void ToggleHeatmap()
+    private async Task ClearSearch()
+    {
+        searchQuery = "";
+        await ReloadReportsAsync();
+    }
+
+    private async Task ToggleHeatmap()
     {
         isHeatmapActive = !isHeatmapActive;
-        UpdateMapLayers();
+        await PushMapDataAsync();
     }
 
-    private void ResetAllFilters()
+    private async Task ResetAllFilters()
     {
         selectedStatus = "All";
         selectedDistrict = "All";
         selectedSort = "recent";
         searchQuery = "";
-        UpdateMapLayers();
+        await ReloadReportsAsync();
     }
 
-    private void OpenAuditModal(RoadReport report)
+    private async Task OpenAuditModal(RoadReport report)
     {
         selectedReport = report;
         isModalOpen = true;
+        history = null;
+        historyError = null;
+        photosForReport = null;
+
+        try
+        {
+            // History and photos are fetched together, only when the popup opens.
+            var historyTask = Reports.GetHistoryAsync(report.DbId);
+            var photosTask = LoadPhotosAsync(report.DbId);
+            await Task.WhenAll(historyTask, photosTask);
+            if (selectedReport != report) return;
+            history = historyTask.Result;
+            photosForReport = photosTask.Result;
+        }
+        catch (Exception ex)
+        {
+            if (selectedReport != report) return;
+            history = new();
+            historyError = ex.Message;
+        }
+    }
+
+    /// <summary>Photos are extra: if they fail to load, the popup still shows everything else.</summary>
+    private async Task<List<ReportPhoto>> LoadPhotosAsync(long reportId)
+    {
+        try
+        {
+            return await Reports.GetPhotosAsync(reportId);
+        }
+        catch (Exception)
+        {
+            return new List<ReportPhoto>();
+        }
     }
 
     private void CloseAuditModal()
@@ -686,7 +757,8 @@
     private async Task FocusMapOnReport(RoadReport report)
     {
         selectedReport = report;
-        await JSRuntime.InvokeVoidAsync("kalsadaMap.panToLocation", report.Lat, report.Lng, report.Title, report.Status, report.Id);
+        if (report.Lat is double lat && report.Lng is double lng)
+            await JSRuntime.InvokeVoidAsync("kalsadaMap.panToLocation", lat, lng, report.Title, report.Status, report.Id);
     }
 
     private async Task ResetMapView()
@@ -694,176 +766,51 @@
         await JSRuntime.InvokeVoidAsync("kalsadaMap.resetView");
     }
 
-    protected override async Task OnAfterRenderAsync(bool firstRender)
+    private async Task PushMapDataAsync()
     {
-        if (firstRender)
+        if (!isMapReady) return;
+        await JSRuntime.InvokeVoidAsync("kalsadaMap.updateData", MapJson(), isHeatmapActive);
+    }
+
+    private string MapJson() => System.Text.Json.JsonSerializer.Serialize(FilteredReports);
+
+    private RoadReport ToRoadReport(HazardReport r) => new()
+    {
+        DbId = r.Id,
+        Id = r.TicketNumber,
+        Title = HazardLabel(r.HazardType),
+        Location = r.LocationLandmark,
+        District = districts.FirstOrDefault(d => d.Id == r.DistrictId)?.Name ?? "Unknown district",
+        HazardType = HazardLabel(r.HazardType),
+        Severity = r.Severity.ToString(),
+        Status = MapStatus(r.Status),
+        ProgressPercent = r.Status == ReportStatus.Repaired ? 100 : null,
+        DateReported = TimeAgo(r.SubmittedAt),
+        ReportedOn = FormatLocal(r.SubmittedAt),
+        CompletionDate = r.Status switch
         {
-            await InitializeMap();
-        }
-    }
+            ReportStatus.Repaired when r.ResolvedAt is DateTime resolved => FormatLocal(resolved),
+            ReportStatus.Submitted or ReportStatus.UnderInspection => $"inspection by {FormatLocal(r.InspectionDueAt)}",
+            _ => "not scheduled yet"
+        },
+        Lat = r.Latitude,
+        Lng = r.Longitude,
+        DistanceFromCenterKm = r.Latitude is double lat && r.Longitude is double lng
+            ? DistanceKm(lat, lng, CenterLat, CenterLng)
+            : null,
+        Notes = string.IsNullOrWhiteSpace(r.StatusNote) ? "No inspection notes yet." : r.StatusNote
+    };
 
-    private async Task InitializeMap()
+    /// <summary>Straight-line distance between two points on Earth, in kilometers.</summary>
+    private static double DistanceKm(double lat1, double lng1, double lat2, double lng2)
     {
-        var reportsJson = System.Text.Json.JsonSerializer.Serialize(allReports);
-        await JSRuntime.InvokeVoidAsync("kalsadaMap.init", "verificationMap", reportsJson);
-    }
+        const double earthRadiusKm = 6371;
+        static double ToRadians(double degrees) => degrees * Math.PI / 180;
 
-    private async void UpdateMapLayers()
-    {
-        var filteredJson = System.Text.Json.JsonSerializer.Serialize(FilteredReports);
-        await JSRuntime.InvokeVoidAsync("kalsadaMap.updateData", filteredJson, isHeatmapActive);
-        StateHasChanged();
+        var dLat = ToRadians(lat2 - lat1);
+        var dLng = ToRadians(lng2 - lng1);
+        var a = Math.Sin(dLat / 2) * Math.Sin(dLat / 2) +
+                Math.Cos(ToRadians(lat1)) * Math.Cos(ToRadians(lat2)) * Math.Sin(dLng / 2) * Math.Sin(dLng / 2);
+        return 2 * earthRadiusKm * Math.Asin(Math.Sqrt(a));
     }
 }
-
-<script>
-  window.kalsadaMap = {
-    mapInstance: null,
-    markersGroup: null,
-    heatmapGroup: null,
-
-    init: function (elementId, reportsJson) {
-      if (typeof L === 'undefined') {
-        setTimeout(() => window.kalsadaMap.init(elementId, reportsJson), 200);
-        return;
-      }
-
-      const container = document.getElementById(elementId);
-      if (!container) return;
-
-      if (window.kalsadaMap.mapInstance) {
-        window.kalsadaMap.mapInstance.remove();
-      }
-
-      // Initialize map centered on City Center (Manila coordinates)
-      const map = L.map(elementId, {
-        scrollWheelZoom: true,
-        zoomControl: true
-      }).setView([14.5995, 120.9842], 13);
-
-      window.kalsadaMap.mapInstance = map;
-
-      // Add modern clean CartoDB / OpenStreetMap tile layer
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; <a href="https://carto.com/">CARTO</a>, OpenStreetMap',
-        maxZoom: 19
-      }).addTo(map);
-
-      window.kalsadaMap.markersGroup = L.layerGroup().addTo(map);
-      window.kalsadaMap.heatmapGroup = L.layerGroup().addTo(map);
-
-      const reports = JSON.parse(reportsJson);
-      window.kalsadaMap.renderMarkers(reports, false);
-    },
-
-    renderMarkers: function (reports, showHeatmap) {
-      if (!window.kalsadaMap.mapInstance) return;
-
-      window.kalsadaMap.markersGroup.clearLayers();
-      window.kalsadaMap.heatmapGroup.clearLayers();
-
-      reports.forEach(r => {
-        // Status color mapping
-        let color = '#2563EB'; // Blue (Inspection)
-        let label = 'Under Inspection';
-        if (r.Status === 'Under Construction') {
-          color = '#F59E0B'; // Amber
-          label = 'Under Construction';
-        } else if (r.Status === 'Finished') {
-          color = '#10B981'; // Emerald
-          label = 'Finished & Repaired';
-        }
-
-        // Custom SVG Pin Marker
-        const svgIcon = L.divIcon({
-          className: 'custom-map-pin',
-          html: `
-            <div style="
-              width: 32px;
-              height: 32px;
-              border-radius: 50% 50% 50% 0;
-              background: ${color};
-              transform: rotate(-45deg);
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              border: 2.5px solid #FFFFFF;
-              box-shadow: 0 4px 10px rgba(0,0,0,0.25);
-              cursor: pointer;
-              transition: transform 0.2s ease;
-            ">
-              <div style="
-                width: 10px;
-                height: 10px;
-                border-radius: 50%;
-                background: #FFFFFF;
-              "></div>
-            </div>
-          `,
-          iconSize: [32, 32],
-          iconAnchor: [16, 32],
-          popupAnchor: [0, -32]
-        });
-
-        const marker = L.marker([r.Lat, r.Lng], { icon: svgIcon });
-        
-        // Rich Popup Window
-        const popupContent = `
-          <div style="font-family: 'Plus Jakarta Sans', sans-serif; padding: 4px; min-width: 200px;">
-            <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; color: ${color}; margin-bottom: 2px;">
-              ● ${label} (${r.ProgressPercent}%)
-            </div>
-            <div style="font-size: 13px; font-weight: 700; color: #0F172A; margin-bottom: 4px;">
-              ${r.Title}
-            </div>
-            <div style="font-size: 11px; color: #64748B; margin-bottom: 6px;">
-              📍 ${r.Location}
-            </div>
-            <div style="font-size: 11px; background: #F1F5F9; padding: 4px 8px; border-radius: 6px; color: #334155;">
-              Crew: <strong>${r.AssignedCrew}</strong>
-            </div>
-          </div>
-        `;
-
-        marker.bindPopup(popupContent);
-        window.kalsadaMap.markersGroup.addLayer(marker);
-
-        // Heatmap density visualization (radial pulsing gradient circles)
-        if (showHeatmap) {
-          const heatColor = (r.Status === 'Under Construction' || r.Severity === 'High') ? '#EF4444' : '#F59E0B';
-          const radius = (r.Severity === 'High') ? 450 : 320;
-          
-          const heatCircle = L.circle([r.Lat, r.Lng], {
-            radius: radius,
-            color: heatColor,
-            fillColor: heatColor,
-            fillOpacity: 0.28,
-            weight: 1.5,
-            dashArray: '4, 4'
-          });
-
-          window.kalsadaMap.heatmapGroup.addLayer(heatCircle);
-        }
-      });
-    },
-
-    updateData: function (filteredReportsJson, showHeatmap) {
-      if (!window.kalsadaMap.mapInstance) return;
-      const reports = JSON.parse(filteredReportsJson);
-      window.kalsadaMap.renderMarkers(reports, showHeatmap);
-    },
-
-    panToLocation: function (lat, lng, title, status, id) {
-      if (!window.kalsadaMap.mapInstance) return;
-      window.kalsadaMap.mapInstance.flyTo([lat, lng], 16, {
-        duration: 1.2,
-        easeLinearity: 0.25
-      });
-    },
-
-    resetView: function () {
-      if (!window.kalsadaMap.mapInstance) return;
-      window.kalsadaMap.mapInstance.flyTo([14.5995, 120.9842], 13, { duration: 1 });
-    }
-  };
-</script>

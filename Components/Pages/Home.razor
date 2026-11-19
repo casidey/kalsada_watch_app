@@ -1,6 +1,14 @@
 @page "/"
 @rendermode InteractiveServer
 @using KalsadaWatchApp.Components.Feedback
+@using KalsadaWatchApp.Models
+@using KalsadaWatchApp.Models.Enums
+@using KalsadaWatchApp.Services
+@using static KalsadaWatchApp.Services.ReportDisplay
+@inject HazardReportService Reports
+@inject IJSRuntime JS
+@inject PersistentComponentState AppState
+@implements IDisposable
 
 <PageTitle>KalsadaWatch - Public Infrastructure Monitoring</PageTitle>
 
@@ -115,30 +123,34 @@
               <div class="w-10 h-10 rounded-full bg-civic-light text-civic-primary flex items-center justify-center mb-2">
                 <span class="material-symbols-outlined text-xl">assignment_turned_in</span>
               </div>
-              <div class="text-3xl font-bold text-civic-title">@reportsCount.ToString("N0")+</div>
+              <div class="text-3xl font-bold text-civic-title">@(dashboard?.TotalReports.ToString("N0") ?? "—")</div>
               <div class="text-xs text-civic-muted">Reports Received</div>
             </div>
             <div class="space-y-1">
               <div class="w-10 h-10 rounded-full bg-civic-light text-civic-primary flex items-center justify-center mb-2">
                 <span class="material-symbols-outlined text-xl">check_circle</span>
               </div>
-              <div class="text-3xl font-bold text-civic-title">@resolutionRate%</div>
+              <div class="text-3xl font-bold text-civic-title">@ResolutionRateText</div>
               <div class="text-xs text-civic-muted">Resolution Rate</div>
             </div>
             <div class="space-y-1 pt-2 border-t border-civic-border">
               <div class="w-10 h-10 rounded-full bg-civic-light text-civic-primary flex items-center justify-center mb-2">
                 <span class="material-symbols-outlined text-xl">timer</span>
               </div>
-              <div class="text-3xl font-bold text-civic-title">@avgResponseHours Hours</div>
+              <div class="text-3xl font-bold text-civic-title">@AverageResponseText</div>
               <div class="text-xs text-civic-muted">Average Response</div>
             </div>
             <div class="space-y-1 pt-2 border-t border-civic-border">
               <div class="w-10 h-10 rounded-full bg-civic-light text-civic-primary flex items-center justify-center mb-2">
                 <span class="material-symbols-outlined text-xl">travel_explore</span>
               </div>
-              <div class="text-3xl font-bold text-civic-title">@districtsCovered Districts</div>
+              <div class="text-3xl font-bold text-civic-title">@(dashboard is null ? "—" : Plural(dashboard.DistrictCount, "District"))</div>
               <div class="text-xs text-civic-muted">Districts Covered</div>
             </div>
+            @if (errorMessage is not null)
+            {
+              <p class="col-span-2 text-[11px] text-red-700" role="alert">Live numbers could not be loaded: @errorMessage</p>
+            }
           </div>
 
           <!-- Rate & Comment (Linked by #emergency; anchor kept for existing links) -->
@@ -224,80 +236,86 @@
             <div class="flex items-center gap-2 text-sm font-bold text-civic-title">
               <span class="material-symbols-outlined text-civic-primary">location_on</span> Spatial Hazard Distribution
             </div>
-            <span class="text-xs text-civic-muted bg-slate-100 px-2.5 py-1 rounded-full">Updated 4m ago</span>
+            <span class="text-xs text-civic-muted bg-slate-100 px-2.5 py-1 rounded-full">
+              @(dashboard?.LastActivityAt is DateTime last ? $"Updated {TimeAgo(last).ToLowerInvariant()}" : "No activity yet")
+            </span>
           </div>
-          <div class="relative w-full h-64 bg-slate-100 rounded-xl overflow-hidden flex items-center justify-center border border-slate-200">
-            <div class="absolute inset-0 bg-gradient-to-tr from-blue-100/60 to-slate-200/40"></div>
-            <div class="relative text-center p-4">
-              <span class="material-symbols-outlined text-4xl text-civic-primary mb-1">map</span>
-              <p class="text-xs font-bold text-civic-title">18 Active Repair Zones Today</p>
-              <p class="text-[11px] text-civic-muted">High congestion corridor: Downtown Main Ave</p>
-            </div>
-            <button class="absolute bottom-3 right-3 text-[11px] font-semibold bg-white text-civic-primary px-3 py-1.5 rounded-lg shadow-sm border border-slate-200 flex items-center gap-1">
-              <span class="material-symbols-outlined text-sm">layers</span> Satellite Overlay Active
-            </button>
-          </div>
+          @if (dashboard is not null)
+          {
+            <p class="text-xs text-civic-muted mb-3">
+              <strong class="text-civic-title">@Plural(dashboard.ConstructionReports, "active repair zone")</strong>
+              @if (dashboard.BusiestDistrict is not null)
+              {
+                <span> &bull; Most open reports: @dashboard.BusiestDistrict (@dashboard.BusiestDistrictOpen)</span>
+              }
+            </p>
+          }
+          @* Real pins from Supabase, drawn by wwwroot/js/kalsada-map.js *@
+          <div id="homeMap" class="w-full h-64 rounded-xl overflow-hidden border border-slate-200 z-10"></div>
           <div class="grid grid-cols-3 gap-4 pt-6 mt-4 border-t border-civic-border text-center sm:text-left">
             <div>
-              <p class="text-[11px] text-civic-muted">Verified Reports</p>
-              <p class="text-lg font-bold text-civic-title">1,240 Reports</p>
+              <p class="text-[11px] text-civic-muted">Under Inspection</p>
+              <p class="text-lg font-bold text-civic-title">@(dashboard is null ? "—" : Plural(dashboard.InspectionReports, "Report"))</p>
             </div>
             <div>
-              <p class="text-[11px] text-civic-muted">Asphalt Deployed</p>
-              <p class="text-lg font-bold text-civic-title">420 Tons</p>
+              <p class="text-[11px] text-civic-muted">Under Construction</p>
+              <p class="text-lg font-bold text-civic-title">@(dashboard is null ? "—" : Plural(dashboard.ConstructionReports, "Zone"))</p>
             </div>
             <div>
-              <p class="text-[11px] text-civic-muted">Field Repair Crews</p>
-              <p class="text-lg font-bold text-civic-title">14 Crews</p>
+              <p class="text-[11px] text-civic-muted">Repaired</p>
+              <p class="text-lg font-bold text-civic-title">@(dashboard is null ? "—" : Plural(dashboard.RepairedReports, "Road"))</p>
             </div>
           </div>
         </div>
 
         <div class="lg:col-span-5 space-y-3">
-          <div class="p-4 bg-white rounded-xl border border-civic-border hover:border-civic-primary/40 transition-colors">
-            <div class="flex items-center justify-between mb-2">
-              <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-blue-50 text-blue-700">
-                <span class="w-1.5 h-1.5 rounded-full bg-blue-600"></span> Work in Progress
-              </span>
-              <span class="text-xs text-civic-muted font-mono">ID: #KW-8921</span>
+          @if (latestReports.Count == 0)
+          {
+            <div class="p-6 bg-white rounded-xl border border-civic-border text-center text-xs text-civic-muted">
+              @(errorMessage is null ? "No road reports yet." : "Reports could not be loaded.")
+              <a href="report" class="block mt-2 font-semibold text-civic-primary hover:underline">Report a road hazard</a>
             </div>
-            <h4 class="text-sm font-bold text-civic-title">Deep Pothole (12 inches)</h4>
-            <p class="text-xs text-civic-muted mt-0.5">18 Market Street / Central Blvd</p>
-            <div class="flex items-center justify-between mt-3 pt-3 border-t border-slate-100 text-[11px] text-civic-muted">
-              <span>Started 2h ago</span>
-              <span class="font-semibold text-civic-primary">Rapid Response Crew 02</span>
+          }
+          @foreach (var report in latestReports)
+          {
+            var status = MapStatus(report.Status);
+            <div class="p-4 bg-white rounded-xl border border-civic-border hover:border-civic-primary/40 transition-colors">
+              <div class="flex items-center justify-between mb-2">
+                @if (status == "Under Construction")
+                {
+                  <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700">
+                    <span class="w-1.5 h-1.5 rounded-full bg-amber-600"></span> Under Construction
+                  </span>
+                }
+                else if (status == "Finished")
+                {
+                  <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700">
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-600"></span> Resolved
+                  </span>
+                }
+                else
+                {
+                  <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-blue-50 text-blue-700">
+                    <span class="w-1.5 h-1.5 rounded-full bg-blue-600"></span> Under Engineering Review
+                  </span>
+                }
+                <span class="text-xs text-civic-muted font-mono">ID: #@report.TicketNumber</span>
+              </div>
+              <h4 class="text-sm font-bold text-civic-title">@HazardLabel(report.HazardType)</h4>
+              <p class="text-xs text-civic-muted mt-0.5">@report.LocationLandmark</p>
+              <div class="flex items-center justify-between mt-3 pt-3 border-t border-slate-100 text-[11px] text-civic-muted">
+                <span>Reported @TimeAgo(report.SubmittedAt).ToLowerInvariant()</span>
+                @if (report.Status == ReportStatus.Repaired && report.ResolvedAt is DateTime resolved)
+                {
+                  <span class="font-semibold text-emerald-600">Repaired @FormatLocal(resolved)</span>
+                }
+                else
+                {
+                  <span class="font-semibold text-civic-primary">@DistrictName(report.DistrictId)</span>
+                }
+              </div>
             </div>
-          </div>
-
-          <div class="p-4 bg-white rounded-xl border border-civic-border hover:border-civic-primary/40 transition-colors">
-            <div class="flex items-center justify-between mb-2">
-              <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700">
-                <span class="w-1.5 h-1.5 rounded-full bg-amber-600"></span> Under Engineering Review
-              </span>
-              <span class="text-xs text-civic-muted font-mono">ID: #KW-8924</span>
-            </div>
-            <h4 class="text-sm font-bold text-civic-title">Alligator Cracking & Road Cavity</h4>
-            <p class="text-xs text-civic-muted mt-0.5">45 Northway Highway</p>
-            <div class="flex items-center justify-between mt-3 pt-3 border-t border-slate-100 text-[11px] text-civic-muted">
-              <span>Field survey scheduled today</span>
-              <span class="font-semibold text-civic-primary">Arterial Road Division</span>
-            </div>
-          </div>
-
-          <div class="p-4 bg-white rounded-xl border border-civic-border hover:border-civic-primary/40 transition-colors">
-            <div class="flex items-center justify-between mb-2">
-              <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700">
-                <span class="w-1.5 h-1.5 rounded-full bg-emerald-600"></span> Resolved
-              </span>
-              <span class="text-xs text-civic-muted font-mono">ID: #KW-8910</span>
-            </div>
-            <h4 class="text-sm font-bold text-civic-title">Hotmix Patching Completed</h4>
-            <p class="text-xs text-civic-muted mt-0.5">South Expressway Service Road</p>
-            <div class="flex items-center justify-between mt-3 pt-3 border-t border-slate-100 text-[11px] text-civic-muted">
-              <span>Auditor quality approved</span>
-              <span class="font-semibold text-emerald-600">100% Completed</span>
-            </div>
-          </div>
+          }
         </div>
       </div>
     </div>
@@ -310,11 +328,81 @@
     [SupplyParameterFromQuery(Name = "tab")]
     public string? TabQuery { get; set; }
 
-    private int reportsCount = 14820;
-    private double resolutionRate = 92.4;
-    private int avgResponseHours = 36;
-    private int districtsCovered = 28;
     private string activeTab = "home";
+
+    // Live data from Supabase (no hardcoded numbers).
+    private const string StateKey = "home-page";
+    private PersistingComponentStateSubscription persistSubscription;
+    private PageData? data;
+    private ReportDashboard? dashboard;
+    private List<HazardReport> latestReports = new();
+    private string? errorMessage;
+    private bool mapStarted;
+
+    /// <summary>Everything the homepage needs: two requests.</summary>
+    private sealed class PageData
+    {
+        public ReportDashboard? Dashboard { get; set; }
+        public List<District> Districts { get; set; } = new();
+        public List<HazardReport> Reports { get; set; } = new();
+    }
+
+    private string ResolutionRateText => dashboard is null || dashboard.TotalReports == 0
+        ? "—"
+        : $"{100.0 * dashboard.RepairedReports / dashboard.TotalReports:0.#}%";
+
+    private string AverageResponseText => dashboard?.AvgResponseHours switch
+    {
+        null => "—",
+        < 1 => "< 1 Hour",
+        double hours => hours == 1 ? "1 Hour" : $"{hours:0.#} Hours"
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        // The page is drawn twice: on the server first (prerendering), then live.
+        // The first pass saves its data so the live pass does not query Supabase again.
+        persistSubscription = AppState.RegisterOnPersisting(() =>
+        {
+            if (data is not null) AppState.PersistAsJson(StateKey, data);
+            return Task.CompletedTask;
+        });
+
+        try
+        {
+            if (!AppState.TryTakeFromJson<PageData>(StateKey, out var saved) || saved is null)
+            {
+                var dashboardTask = Reports.GetDashboardAsync();
+                var districtsTask = Reports.GetDistrictsAsync();
+                var reportsTask = Reports.GetReportsAsync(HazardReportService.PublicStatuses, null, null, ReportSort.Newest);
+                await Task.WhenAll(dashboardTask, districtsTask, reportsTask);
+                saved = new PageData { Dashboard = dashboardTask.Result, Districts = districtsTask.Result, Reports = reportsTask.Result };
+            }
+
+            data = saved;
+            dashboard = saved.Dashboard;
+            latestReports = saved.Reports.Take(3).ToList(); // already newest first
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // Draw the pins once the page is live and the data is in.
+        if (mapStarted || data is null) return;
+        mapStarted = true;
+
+        var pins = data.Reports.Select(r => ToMapPin(r, DistrictName(r.DistrictId)));
+        await JS.InvokeVoidAsync("kalsadaMap.init", "homeMap", System.Text.Json.JsonSerializer.Serialize(pins));
+    }
+
+    private string DistrictName(long districtId)
+        => data?.Districts.FirstOrDefault(d => d.Id == districtId)?.Name ?? "Unknown district";
+
+    public void Dispose() => persistSubscription.Dispose();
 
     protected override void OnParametersSet()
     {

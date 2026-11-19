@@ -1,13 +1,18 @@
+using Supabase.Postgrest.Attributes;
+using Supabase.Postgrest.Models;
+
 namespace KalsadaWatchApp.Models;
 
-/// <summary>An administrative district or operational area, e.g. "Central District".</summary>
-public class District
+/// <summary>An administrative district or operational area, e.g. "Central District". Table: districts.</summary>
+[Table("districts")]
+public class District : BaseModel
 {
-    public int Id { get; set; }
-    public string Name { get; set; } = string.Empty;
-    public string City { get; set; } = string.Empty;
+    [PrimaryKey("id", false)]
+    public long Id { get; set; }
 
-    // Navigation
-    public ICollection<User> Residents { get; set; } = new List<User>();
-    public ICollection<HazardReport> HazardReports { get; set; } = new List<HazardReport>();
+    [Column("name")]
+    public string Name { get; set; } = string.Empty;
+
+    [Column("city")]
+    public string City { get; set; } = string.Empty;
 }

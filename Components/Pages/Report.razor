@@ -1,5 +1,13 @@
 @page "/report"
 @rendermode InteractiveServer
+@using KalsadaWatchApp.Models
+@using KalsadaWatchApp.Models.Enums
+@using KalsadaWatchApp.Services
+@inject HazardReportService Reports
+@inject IJSRuntime JS
+@inject PersistentComponentState AppState
+@using static KalsadaWatchApp.Services.ReportDisplay
+@implements IAsyncDisposable
 
 <PageTitle>KalsadaWatch - Report Road Hazard</PageTitle>
 
@@ -81,14 +89,40 @@
         </p>
       </div>
 
-      <form class="space-y-5" onsubmit="return false;">
+      <form class="space-y-5" @onsubmit="SubmitAsync">
         <!-- Location / Street -->
         <div>
           <label class="block text-xs font-semibold text-civic-title mb-1.5">Hazard Location or Nearest Landmark <span class="text-red-500">*</span></label>
           <div class="relative">
             <span class="material-symbols-outlined absolute left-3.5 top-3 text-slate-400 text-lg">location_on</span>
-            <input type="text" placeholder="e.g. Corner Main Ave & 4th Street, in front of City Hall" class="w-full pl-10 pr-4 py-2.5 rounded-xl border border-civic-border text-sm text-civic-title placeholder:text-slate-400 focus:outline-none focus:border-civic-primary focus:ring-2 focus:ring-civic-primary/15" required />
+            <input type="text" @bind="location" maxlength="200" placeholder="e.g. Corner Main Ave & 4th Street, in front of City Hall" class="w-full pl-10 pr-4 py-2.5 rounded-xl border border-civic-border text-sm text-civic-title placeholder:text-slate-400 focus:outline-none focus:border-civic-primary focus:ring-2 focus:ring-civic-primary/15" required />
           </div>
+        </div>
+
+        <!-- Pin on Map: the saved coordinates put the report on the Road Damage Map -->
+        <div>
+          <div class="flex items-center justify-between gap-3 mb-1.5">
+            <label class="block text-xs font-semibold text-civic-title">Pin the Exact Spot on the Map <span class="text-red-500">*</span></label>
+            <button type="button" @onclick="UseMyLocation" class="px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-civic-light text-civic-primary hover:bg-blue-200 transition-colors flex items-center gap-1">
+              <span class="material-symbols-outlined text-sm">my_location</span>
+              <span>Use my current location</span>
+            </button>
+          </div>
+          <div id="reportPickerMap" class="w-full h-64 rounded-xl overflow-hidden border border-civic-border z-10"></div>
+          <p class="text-[11px] mt-1.5 @(latitude is null ? "text-civic-muted" : "text-emerald-700 font-semibold")">
+            @if (latitude is double lat && longitude is double lng)
+            {
+              <span>Pinned at @lat.ToString("F5"), @lng.ToString("F5"). Click the map again to move the pin.</span>
+            }
+            else
+            {
+              <span>Click the map where the hazard is, or use your current location.</span>
+            }
+          </p>
+          @if (locationError is not null)
+          {
+            <p class="text-[11px] mt-1 text-red-700">@locationError</p>
+          }
         </div>
 
         <!-- Hazard Type & Severity (Clean with NO default pre-selected data) -->
@@ -96,12 +130,12 @@
           <div>
             <label class="block text-xs font-semibold text-civic-title mb-1.5">Hazard Type <span class="text-red-500">*</span></label>
             <div class="relative">
-              <select class="w-full px-4 py-2.5 rounded-xl border border-civic-border text-sm text-civic-title focus:outline-none focus:border-civic-primary focus:ring-2 focus:ring-civic-primary/15 appearance-none bg-white cursor-pointer" required>
-                <option value="" disabled selected>Select hazard type</option>
-                <option>Deep Pothole</option>
-                <option>Alligator / Surface Cracks</option>
-                <option>Drain / Manhole Collapse</option>
-                <option>Road Shoulder Cavity</option>
+              <select @bind="hazardType" class="w-full px-4 py-2.5 rounded-xl border border-civic-border text-sm text-civic-title focus:outline-none focus:border-civic-primary focus:ring-2 focus:ring-civic-primary/15 appearance-none bg-white cursor-pointer" required>
+                <option value="" disabled>Select hazard type</option>
+                <option value="@HazardType.DeepPothole">Deep Pothole</option>
+                <option value="@HazardType.AlligatorCracks">Alligator / Surface Cracks</option>
+                <option value="@HazardType.DrainCollapse">Drain / Manhole Collapse</option>
+                <option value="@HazardType.ShoulderCavity">Road Shoulder Cavity</option>
               </select>
               <span class="material-symbols-outlined absolute right-3 top-2.5 text-slate-400 text-lg pointer-events-none">expand_more</span>
             </div>
@@ -110,11 +144,11 @@
           <div>
             <label class="block text-xs font-semibold text-civic-title mb-1.5">Severity Rating <span class="text-red-500">*</span></label>
             <div class="relative">
-              <select class="w-full px-4 py-2.5 rounded-xl border border-civic-border text-sm text-civic-title focus:outline-none focus:border-civic-primary focus:ring-2 focus:ring-civic-primary/15 appearance-none bg-white cursor-pointer" required>
-                <option value="" disabled selected>Select severity level</option>
-                <option>High Priority (Deep cavity, vehicle risk)</option>
-                <option>Medium Priority (Standard road erosion)</option>
-                <option>Low Priority (Early surface degradation)</option>
+              <select @bind="severity" class="w-full px-4 py-2.5 rounded-xl border border-civic-border text-sm text-civic-title focus:outline-none focus:border-civic-primary focus:ring-2 focus:ring-civic-primary/15 appearance-none bg-white cursor-pointer" required>
+                <option value="" disabled>Select severity level</option>
+                <option value="@SeverityLevel.High">High Priority (Deep cavity, vehicle risk)</option>
+                <option value="@SeverityLevel.Medium">Medium Priority (Standard road erosion)</option>
+                <option value="@SeverityLevel.Low">Low Priority (Early surface degradation)</option>
               </select>
               <span class="material-symbols-outlined absolute right-3 top-2.5 text-slate-400 text-lg pointer-events-none">expand_more</span>
             </div>
@@ -125,41 +159,82 @@
         <div>
           <label class="block text-xs font-semibold text-civic-title mb-1.5">City District / Operational Area <span class="text-red-500">*</span></label>
           <div class="relative">
-            <select class="w-full px-4 py-2.5 rounded-xl border border-civic-border text-sm text-civic-title focus:outline-none focus:border-civic-primary focus:ring-2 focus:ring-civic-primary/15 appearance-none bg-white cursor-pointer" required>
-              <option value="" disabled selected>Select administrative district</option>
-              <option>Central District</option>
-              <option>North District</option>
-              <option>South District</option>
-              <option>East Industrial Zone</option>
-              <option>West Municipal Area</option>
+            <select @bind="districtId" class="w-full px-4 py-2.5 rounded-xl border border-civic-border text-sm text-civic-title focus:outline-none focus:border-civic-primary focus:ring-2 focus:ring-civic-primary/15 appearance-none bg-white cursor-pointer" required>
+              <option value="" disabled>@(districts.Count == 0 ? "Loading districts…" : "Select administrative district")</option>
+              @foreach (var district in districts)
+              {
+                <option value="@district.Id">@district.Name</option>
+              }
             </select>
             <span class="material-symbols-outlined absolute right-3 top-2.5 text-slate-400 text-lg pointer-events-none">expand_more</span>
           </div>
         </div>
 
-        <!-- Photo Upload Box -->
+        <!-- Photo Upload Box: photos go to Supabase Storage when the report is submitted -->
         <div>
-          <label class="block text-xs font-semibold text-civic-title mb-1.5">Upload On-Site Photo Proof</label>
-          <div class="border-2 border-dashed border-civic-border hover:border-civic-primary/50 rounded-2xl p-6 text-center transition-colors cursor-pointer bg-slate-50/50">
-            <div class="w-10 h-10 rounded-full bg-civic-light text-civic-primary flex items-center justify-center mx-auto mb-2">
-              <span class="material-symbols-outlined text-xl">photo_camera</span>
+          <label class="block text-xs font-semibold text-civic-title mb-1.5">
+            Upload On-Site Photo Proof <span class="font-normal text-civic-muted">(optional, up to @MaxPhotos)</span>
+          </label>
+          @if (photos.Count < MaxPhotos)
+          {
+            <div class="relative border-2 border-dashed border-civic-border hover:border-civic-primary/50 rounded-2xl p-6 text-center transition-colors cursor-pointer bg-slate-50/50">
+              @* The file input covers the whole box, so clicking or dropping a photo anywhere on it works. *@
+              <InputFile OnChange="AddPhotosAsync" multiple accept="image/jpeg,image/png,image/webp"
+                         class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" title="Attach roadway photos" />
+              <div class="w-10 h-10 rounded-full bg-civic-light text-civic-primary flex items-center justify-center mx-auto mb-2">
+                <span class="material-symbols-outlined text-xl">photo_camera</span>
+              </div>
+              <p class="text-xs font-semibold text-civic-title">@(processingPhotos ? "Preparing photos…" : "Click to attach or drag roadway photos")</p>
+              <p class="text-[11px] text-slate-400 mt-1">JPEG, PNG or WebP, up to 10MB each</p>
             </div>
-            <p class="text-xs font-semibold text-civic-title">Click to attach or drag roadway photo</p>
-            <p class="text-[11px] text-slate-400 mt-1">JPEG, PNG files up to 10MB accepted</p>
-          </div>
+          }
+          @if (photos.Count > 0)
+          {
+            <div class="grid grid-cols-3 gap-3 mt-3">
+              @foreach (var photo in photos)
+              {
+                <div class="relative">
+                  <img src="@photo.PreviewDataUrl" alt="Selected photo @photo.Name" class="w-full h-24 object-cover rounded-xl border border-civic-border" />
+                  <button type="button" @onclick="() => { photos.Remove(photo); }" title="Remove this photo"
+                          class="absolute top-1.5 right-1.5 w-7 h-7 rounded-full bg-white/90 text-slate-700 hover:bg-white shadow flex items-center justify-center">
+                    <span class="material-symbols-outlined text-base">close</span>
+                  </button>
+                </div>
+              }
+            </div>
+          }
+          @if (photoError is not null)
+          {
+            <p class="text-[11px] mt-1.5 text-red-700">@photoError</p>
+          }
         </div>
 
         <!-- Notes / Textarea -->
         <div>
           <label class="block text-xs font-semibold text-civic-title mb-1.5">Hazard Observation Details</label>
-          <textarea rows="3" placeholder="Specify depth, lane blockage, water pooling, or specific hazards..." class="w-full px-4 py-2.5 rounded-xl border border-civic-border text-sm text-civic-title placeholder:text-slate-400 focus:outline-none focus:border-civic-primary focus:ring-2 focus:ring-civic-primary/15 resize-none"></textarea>
+          <textarea rows="3" @bind="description" maxlength="1000" placeholder="Specify depth, lane blockage, water pooling, or specific hazards..." class="w-full px-4 py-2.5 rounded-xl border border-civic-border text-sm text-civic-title placeholder:text-slate-400 focus:outline-none focus:border-civic-primary focus:ring-2 focus:ring-civic-primary/15 resize-none"></textarea>
         </div>
 
         <!-- Submit Button -->
-        <button type="submit" class="w-full h-12 rounded-full bg-civic-primary hover:bg-civic-dark text-white font-semibold text-sm flex items-center justify-center gap-2 transition-all shadow-sm hover:shadow mt-2">
+        @* Disabled while saving, so a double click cannot send two reports. *@
+        <button type="submit" disabled="@(saving || processingPhotos)" class="w-full h-12 rounded-full bg-civic-primary hover:bg-civic-dark text-white font-semibold text-sm flex items-center justify-center gap-2 transition-all shadow-sm hover:shadow mt-2 disabled:opacity-50 disabled:cursor-not-allowed">
           <span class="material-symbols-outlined text-base">send</span>
-          <span>Submit Road Hazard Report</span>
+          <span>@(saving ? "Submitting…" : "Submit Road Hazard Report")</span>
         </button>
+
+        @if (savedTicket is not null)
+        {
+          <p class="text-xs text-center text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3" role="status">
+            Report <strong class="font-mono">@savedTicket</strong> submitted@(savedPhotoCount > 0 ? $" with {Plural(savedPhotoCount, "photo")}" : ""). An inspection is due within 48 hours.
+            <a href="verify" class="font-semibold underline">See it on the map list</a>
+          </p>
+        }
+        @if (errorMessage is not null)
+        {
+          <p class="text-xs text-center text-red-800 bg-red-50 border border-red-200 rounded-xl px-4 py-3" role="alert">
+            @errorMessage
+          </p>
+        }
 
         <p class="text-xs text-center text-civic-muted pt-2">
           Need to verify road statuses? <a href="verify" class="font-semibold text-civic-primary hover:underline">View live damage & heat map</a>
@@ -195,4 +270,228 @@
 
 @code {
     private string activeTab = "report";
+
+    // Form fields. The selects hold the enum name or district id as text; "" means nothing chosen yet.
+    private string location = "";
+    private string hazardType = "";
+    private string severity = "";
+    private string districtId = "";
+    private string description = "";
+    private double? latitude;   // set when the citizen pins the map
+    private double? longitude;
+    private string? locationError;
+    private DotNetObjectReference<Report>? selfRef; // lets the map script send the pin back here
+    private PersistingComponentStateSubscription persistSubscription;
+    private const string StateKey = "report-districts";
+
+    // Photos picked by the citizen, held in memory until the report is submitted.
+    private const int MaxPhotos = 3;
+    private const long MaxPhotoBytes = 10 * 1024 * 1024; // 10 MB, same as the Storage bucket limit
+    private static readonly string[] AllowedPhotoTypes = { "image/jpeg", "image/png", "image/webp" };
+    private readonly List<PendingPhoto> photos = new();
+    private bool processingPhotos;
+    private string? photoError;
+    private int savedPhotoCount;
+
+    private sealed class PendingPhoto
+    {
+        public required string Name { get; init; }
+        public required byte[] Jpeg { get; init; }            // shrunk to at most 1600 px, sent to Storage
+        public required string PreviewDataUrl { get; init; }  // small thumbnail shown on the form
+    }
+
+    private List<District> districts = new();
+    private bool saving;
+    private string? savedTicket;
+    private string? errorMessage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Prerendering saves the district list so the live page does not query Supabase a second time.
+        persistSubscription = AppState.RegisterOnPersisting(() =>
+        {
+            if (districts.Count > 0) AppState.PersistAsJson(StateKey, districts);
+            return Task.CompletedTask;
+        });
+
+        try
+        {
+            if (!AppState.TryTakeFromJson<List<District>>(StateKey, out var saved) || saved is null)
+                saved = await Reports.GetDistrictsAsync();
+            districts = saved;
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Could not load the district list: {ex.Message}";
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            selfRef = DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("kalsadaPicker.init", "reportPickerMap", selfRef);
+        }
+    }
+
+    /// <summary>Called by the map script when the citizen clicks the map or shares their location.</summary>
+    [JSInvokable]
+    public Task SetPinnedLocation(double lat, double lng) => InvokeAsync(() =>
+    {
+        latitude = lat;
+        longitude = lng;
+        locationError = null;
+        StateHasChanged();
+    });
+
+    /// <summary>Called by the map script when the browser cannot share the location.</summary>
+    [JSInvokable]
+    public Task LocationFailed(string message) => InvokeAsync(() =>
+    {
+        locationError = message;
+        StateHasChanged();
+    });
+
+    private async Task UseMyLocation()
+    {
+        locationError = null;
+        await JS.InvokeVoidAsync("kalsadaPicker.useMyLocation");
+    }
+
+    private async Task AddPhotosAsync(InputFileChangeEventArgs e)
+    {
+        photoError = null;
+        processingPhotos = true;
+        try
+        {
+            foreach (var file in e.GetMultipleFiles(e.FileCount))
+            {
+                if (photos.Count >= MaxPhotos)
+                {
+                    photoError = $"You can attach up to {MaxPhotos} photos.";
+                    break;
+                }
+                if (!AllowedPhotoTypes.Contains(file.ContentType))
+                {
+                    photoError = $"{file.Name} is not a JPEG, PNG or WebP image.";
+                    continue;
+                }
+                if (file.Size > MaxPhotoBytes)
+                {
+                    photoError = $"{file.Name} is larger than 10MB.";
+                    continue;
+                }
+
+                // The browser shrinks each photo before sending it: faster uploads and less storage used.
+                var forUpload = await file.RequestImageFileAsync("image/jpeg", 1600, 1600);
+                var thumbnail = await file.RequestImageFileAsync("image/jpeg", 240, 240);
+                photos.Add(new PendingPhoto
+                {
+                    Name = file.Name,
+                    Jpeg = await ReadAllBytesAsync(forUpload),
+                    PreviewDataUrl = "data:image/jpeg;base64," + Convert.ToBase64String(await ReadAllBytesAsync(thumbnail))
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            photoError = $"Could not read the photo: {ex.Message}";
+        }
+        finally
+        {
+            processingPhotos = false;
+        }
+    }
+
+    private static async Task<byte[]> ReadAllBytesAsync(IBrowserFile file)
+    {
+        await using var stream = file.OpenReadStream(MaxPhotoBytes);
+        using var memory = new MemoryStream();
+        await stream.CopyToAsync(memory);
+        return memory.ToArray();
+    }
+
+    private async Task SubmitAsync()
+    {
+        if (saving || processingPhotos) return;
+        savedTicket = null;
+        savedPhotoCount = 0;
+        errorMessage = null;
+
+        if (location.Trim().Length < 3 ||
+            !Enum.TryParse<HazardType>(hazardType, out var type) || !Enum.IsDefined(type) ||
+            !Enum.TryParse<SeverityLevel>(severity, out var level) || !Enum.IsDefined(level) ||
+            !long.TryParse(districtId, out var district))
+        {
+            errorMessage = "Please fill in the location (at least 3 characters), hazard type, severity and district.";
+            return;
+        }
+
+        if (latitude is not double lat || longitude is not double lng)
+        {
+            errorMessage = "Please pin the hazard on the map so it shows on the Road Damage Map.";
+            return;
+        }
+
+        saving = true;
+        try
+        {
+            var saved = await Reports.CreateAsync(new HazardReport
+            {
+                LocationLandmark = location.Trim(),
+                HazardType = type,
+                Severity = level,
+                DistrictId = district,
+                Description = description.Trim(),
+                Latitude = lat,
+                Longitude = lng
+            });
+
+            savedTicket = saved.TicketNumber;
+
+            // The report is saved first, so a failed photo upload never loses the report itself.
+            if (photos.Count > 0)
+            {
+                try
+                {
+                    var uploaded = await Reports.AddPhotosAsync(saved, photos.Select(p => p.Jpeg).ToList());
+                    savedPhotoCount = uploaded.Count;
+                }
+                catch (Exception ex)
+                {
+                    errorMessage = $"Report {saved.TicketNumber} was saved, but its photos were not uploaded: {ex.Message}";
+                }
+            }
+
+            photos.Clear();
+            location = hazardType = severity = districtId = description = "";
+            latitude = longitude = null;
+            await JS.InvokeVoidAsync("kalsadaPicker.clear");
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Your report was not saved: {ex.Message}";
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        persistSubscription.Dispose();
+        if (selfRef is null) return; // the map was never started (e.g. the prerendered copy of the page)
+
+        try
+        {
+            await JS.InvokeVoidAsync("kalsadaPicker.dispose");
+        }
+        catch (JSDisconnectedException)
+        {
+            // The browser tab is already closed; nothing to clean up there.
+        }
+        selfRef.Dispose();
+    }
 }

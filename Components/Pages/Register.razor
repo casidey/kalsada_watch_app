@@ -1,5 +1,10 @@
 @page "/register"
 @rendermode InteractiveServer
+@using KalsadaWatchApp.Models
+@using KalsadaWatchApp.Services
+@inject HazardReportService Reports
+@inject PersistentComponentState AppState
+@implements IDisposable
 
 <PageTitle>KalsadaWatch - Citizen Portal Registration</PageTitle>
 
@@ -98,12 +103,12 @@
           <label class="block text-xs font-semibold text-[#0F172A] mb-1.5">Residential District / Municipality <span class="text-red-500">*</span></label>
           <div class="relative">
             <select @bind="selectedDistrict" class="w-full px-4 py-2.5 rounded-xl border border-[#E2EAF4] text-sm text-[#0F172A] focus:outline-none focus:border-[#2563EB] focus:ring-2 focus:ring-[#2563EB]/15 appearance-none bg-white cursor-pointer" required>
-              <option value="" disabled selected>Select your municipality or district</option>
-              <option value="Central District">Central District</option>
-              <option value="South Urban Corridor">South Urban Corridor</option>
-              <option value="East Industrial Zone">East Industrial Zone</option>
-              <option value="West Municipal Area">West Municipal Area</option>
-              <option value="Northern Coastal District">Northern Coastal District</option>
+              <option value="" disabled>@(districtsError ? "Districts could not be loaded" : "Select your municipality or district")</option>
+              @* The same district list as the rest of the app, from Supabase *@
+              @foreach (var district in districts)
+              {
+                <option value="@district.Id">@district.Name</option>
+              }
             </select>
             <span class="material-symbols-outlined absolute right-3 top-2.5 text-[#94A3B8] text-lg pointer-events-none">expand_more</span>
           </div>
@@ -172,6 +177,34 @@
     private string password = "";
     private string confirmPassword = "";
     private bool agreedToTerms = false;
+
+    private List<District> districts = new();
+    private bool districtsError;
+    private const string StateKey = "register-districts";
+    private PersistingComponentStateSubscription persistSubscription;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Prerendering saves the list so the live page does not query Supabase a second time.
+        persistSubscription = AppState.RegisterOnPersisting(() =>
+        {
+            if (districts.Count > 0) AppState.PersistAsJson(StateKey, districts);
+            return Task.CompletedTask;
+        });
+
+        try
+        {
+            if (!AppState.TryTakeFromJson<List<District>>(StateKey, out var saved) || saved is null)
+                saved = await Reports.GetDistrictsAsync();
+            districts = saved;
+        }
+        catch (Exception)
+        {
+            districtsError = true;
+        }
+    }
+
+    public void Dispose() => persistSubscription.Dispose();
 
     private void HandleRegistration()
     {

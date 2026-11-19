@@ -1,5 +1,7 @@
 @using System.Globalization
 @inject IReviewSource ReviewSource
+@inject PersistentComponentState AppState
+@implements IDisposable
 
 @* Page-scoped: adds the filled star style. The global icon font in App.razor loads outlined icons only. *@
 <HeadContent>
@@ -137,9 +139,38 @@
     // With fewer reviews the grid drops the spans so no empty cells appear in the middle.
     private bool isFullBento => tiles.Count == 5;
 
+    private const string StateKey = "citizen-feedback";
+    private PersistingComponentStateSubscription persistSubscription;
+    private bool loadFailed;
+
     protected override async Task OnInitializedAsync()
     {
-        var approved = (await ReviewSource.GetApprovedReviewsAsync())
+        // Prerendering saves the reviews so the live page does not query Supabase a second time.
+        persistSubscription = AppState.RegisterOnPersisting(() =>
+        {
+            if (reviews is not null && !loadFailed) AppState.PersistAsJson(StateKey, reviews);
+            return Task.CompletedTask;
+        });
+
+        List<CitizenReview> loaded;
+        if (AppState.TryTakeFromJson<List<CitizenReview>>(StateKey, out var saved) && saved is not null)
+        {
+            loaded = saved;
+        }
+        else
+        {
+            try
+            {
+                loaded = (await ReviewSource.GetApprovedReviewsAsync()).ToList();
+            }
+            catch (Exception)
+            {
+                loadFailed = true;   // show the empty state instead of breaking the homepage
+                loaded = new();
+            }
+        }
+
+        var approved = loaded
             .Where(r => r.IsApproved)                       // moderation guard, even if the source forgets
             .ToList();
         summary = ReviewSummary.From(approved);
@@ -148,6 +179,8 @@
             .OrderByDescending(r => r.PostedAt).Take(5).ToList(); // newest first, never filtered by rating
         reviews = approved;
     }
+
+    public void Dispose() => persistSubscription.Dispose();
 
     private static string Ago(DateTimeOffset postedAt)
     {

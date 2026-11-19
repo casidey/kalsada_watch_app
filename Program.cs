@@ -1,5 +1,6 @@
 using KalsadaWatchApp.Components;
 using KalsadaWatchApp.Components.Feedback;
+using KalsadaWatchApp.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -7,12 +8,26 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
-// Citizen feedback reviews. PLACEHOLDER DATA is only used in Development;
-// every other environment gets the empty state until a real source is connected.
-if (builder.Environment.IsDevelopment())
-    builder.Services.AddSingleton<IReviewSource, MockReviewSource>();
-else
-    builder.Services.AddSingleton<IReviewSource, EmptyReviewSource>();
+// Supabase: one client for the whole app. This is a Blazor Server app, so the
+// client runs on the server and the key never reaches the browser.
+var supabaseUrl = builder.Configuration["Supabase:Url"];
+var supabaseKey = builder.Configuration["Supabase:Key"];
+if (string.IsNullOrWhiteSpace(supabaseUrl) || string.IsNullOrWhiteSpace(supabaseKey) ||
+    supabaseUrl.Contains("YOUR-REF") || supabaseKey.EndsWith("..."))
+{
+    throw new InvalidOperationException(
+        "Supabase is not configured. In appsettings.json, set Supabase:Url to your Project URL " +
+        "and Supabase:Key to your publishable key (Supabase dashboard -> Connect, and Settings -> API Keys).");
+}
+
+var supabase = new Supabase.Client(supabaseUrl, supabaseKey,
+    new Supabase.SupabaseOptions { AutoConnectRealtime = false });
+await supabase.InitializeAsync();
+builder.Services.AddSingleton(supabase);
+builder.Services.AddSingleton<HazardReportService>();
+
+// Citizen feedback reviews: approved reviews from Supabase (the approved_reviews view).
+builder.Services.AddSingleton<IReviewSource, SupabaseReviewSource>();
 
 var app = builder.Build();
 
