@@ -46,6 +46,15 @@ public static class ReportDisplay
         _ => "Under Inspection"
     };
 
+    /// <summary>The next step in the repair workflow, or null when the report is finished (or rejected).</summary>
+    public static ReportStatus? NextStatus(ReportStatus status) => status switch
+    {
+        ReportStatus.Submitted => ReportStatus.UnderInspection,
+        ReportStatus.UnderInspection => ReportStatus.UnderConstruction,
+        ReportStatus.UnderConstruction => ReportStatus.Repaired,
+        _ => null
+    };
+
     public static MapPin ToMapPin(HazardReport report, string districtName) => new(
         Id: report.TicketNumber,
         Title: HazardLabel(report.HazardType),

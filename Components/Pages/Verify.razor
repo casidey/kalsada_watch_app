@@ -262,6 +262,10 @@
 
         <!-- Scrollable Report Cards List -->
         <div class="space-y-3.5 max-h-[600px] overflow-y-auto pr-1">
+          @if (pageMessage is not null)
+          {
+            <div class="bg-emerald-50 rounded-2xl border border-emerald-200 p-4 text-xs text-emerald-800" role="status">@pageMessage</div>
+          }
           @if (errorMessage is not null)
           {
             <div class="bg-red-50 rounded-2xl border border-red-200 p-5 text-xs text-red-800" role="alert">
@@ -458,6 +462,15 @@
           </div>
         }
 
+        <!-- Citizen Description (editable with "Edit details") -->
+        @if (!string.IsNullOrWhiteSpace(selectedReport.Description))
+        {
+          <div class="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs">
+            <span class="block font-bold text-civic-title mb-1">Citizen Description:</span>
+            <p class="text-civic-muted leading-relaxed">@selectedReport.Description</p>
+          </div>
+        }
+
         <!-- Field Engineer Notes -->
         <div class="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs">
           <span class="block font-bold text-civic-title mb-1">Public Works Inspection Notes:</span>
@@ -499,6 +512,81 @@
                 </li>
               }
             </ol>
+          }
+        </div>
+
+        <!-- Manage This Report: edit (status, details) and delete (withdraw) -->
+        <div class="p-3.5 rounded-xl border border-civic-border text-xs space-y-3">
+          <span class="block font-bold text-civic-title">Manage This Report:</span>
+
+          @if (manageMode == ManageMode.None)
+          {
+            <div class="flex flex-wrap gap-2">
+              @if (NextStatus(selectedReport.StatusValue) is ReportStatus next)
+              {
+                <button @onclick="() => StartManage(ManageMode.Status)" class="px-3.5 py-2 rounded-full bg-civic-primary hover:bg-civic-dark text-white font-semibold flex items-center gap-1">
+                  <span class="material-symbols-outlined text-sm">arrow_forward</span> Move to @StatusLabel(next)
+                </button>
+              }
+              <button @onclick="() => StartManage(ManageMode.Details)" class="px-3.5 py-2 rounded-full border border-slate-200 text-civic-title hover:bg-slate-50 font-semibold flex items-center gap-1">
+                <span class="material-symbols-outlined text-sm">edit</span> Edit details
+              </button>
+              <button @onclick="() => StartManage(ManageMode.Withdraw)" class="px-3.5 py-2 rounded-full border border-red-200 text-red-700 hover:bg-red-50 font-semibold flex items-center gap-1">
+                <span class="material-symbols-outlined text-sm">delete</span> Withdraw report
+              </button>
+            </div>
+          }
+          else if (manageMode == ManageMode.Status && NextStatus(selectedReport.StatusValue) is ReportStatus nextStatus)
+          {
+            <label class="block font-semibold text-civic-title">Note for the history (moving to @StatusLabel(nextStatus))</label>
+            <textarea @bind="statusNote" @bind:event="oninput" rows="2" maxlength="500" placeholder="e.g. Crew dispatched with hotmix asphalt."
+                      class="w-full px-3 py-2 rounded-xl border border-civic-border focus:outline-none focus:border-civic-primary"></textarea>
+            <div class="flex gap-2">
+              <button @onclick="ConfirmStatusChangeAsync" disabled="@actionSaving" class="px-3.5 py-2 rounded-full bg-civic-primary hover:bg-civic-dark text-white font-semibold disabled:opacity-50">
+                @(actionSaving ? "Saving…" : $"Move to {StatusLabel(nextStatus)}")
+              </button>
+              <button @onclick="CancelManage" disabled="@actionSaving" class="px-3.5 py-2 rounded-full border border-slate-200 text-civic-muted font-semibold">Cancel</button>
+            </div>
+          }
+          else if (manageMode == ManageMode.Details)
+          {
+            <label class="block font-semibold text-civic-title">Severity</label>
+            <select @bind="editSeverity" class="w-full px-3 py-2 rounded-xl border border-civic-border bg-white focus:outline-none focus:border-civic-primary">
+              <option value="@SeverityLevel.High">High Priority</option>
+              <option value="@SeverityLevel.Medium">Medium Priority</option>
+              <option value="@SeverityLevel.Low">Low Priority</option>
+            </select>
+            <label class="block font-semibold text-civic-title">Description</label>
+            <textarea @bind="editDescription" @bind:event="oninput" rows="3" maxlength="1000"
+                      class="w-full px-3 py-2 rounded-xl border border-civic-border focus:outline-none focus:border-civic-primary"></textarea>
+            <div class="flex gap-2">
+              <button @onclick="SaveDetailsAsync" disabled="@actionSaving" class="px-3.5 py-2 rounded-full bg-civic-primary hover:bg-civic-dark text-white font-semibold disabled:opacity-50">
+                @(actionSaving ? "Saving…" : "Save changes")
+              </button>
+              <button @onclick="CancelManage" disabled="@actionSaving" class="px-3.5 py-2 rounded-full border border-slate-200 text-civic-muted font-semibold">Cancel</button>
+            </div>
+          }
+          else if (manageMode == ManageMode.Withdraw)
+          {
+            <p class="text-red-800 bg-red-50 border border-red-200 rounded-xl px-3 py-2">
+              Withdraw <strong class="font-mono">#@selectedReport.Id</strong>? It disappears from the map and the counts.
+              The row stays in the database with a <span class="font-mono">deleted_at</span> date (soft delete).
+            </p>
+            <div class="flex gap-2">
+              <button @onclick="ConfirmWithdrawAsync" disabled="@actionSaving" class="px-3.5 py-2 rounded-full bg-red-700 hover:bg-red-800 text-white font-semibold disabled:opacity-50">
+                @(actionSaving ? "Withdrawing…" : "Yes, withdraw")
+              </button>
+              <button @onclick="CancelManage" disabled="@actionSaving" class="px-3.5 py-2 rounded-full border border-slate-200 text-civic-muted font-semibold">Cancel</button>
+            </div>
+          }
+
+          @if (actionMessage is not null)
+          {
+            <p class="text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2" role="status">@actionMessage</p>
+          }
+          @if (actionError is not null)
+          {
+            <p class="text-red-700" role="alert">@actionError</p>
           }
         </div>
 
@@ -565,6 +653,9 @@
         public double? Lng { get; set; }
         public double? DistanceFromCenterKm { get; set; }
         public string Notes { get; set; } = "";
+        public string Description { get; set; } = "";     // the citizen's own words
+        public ReportStatus StatusValue { get; set; }      // the database value, for the next-status button
+        public SeverityLevel SeverityValue { get; set; }
     }
 
     private int underConstructionCount => CountOf(ReportStatus.UnderConstruction);
@@ -711,6 +802,9 @@
         history = null;
         historyError = null;
         photosForReport = null;
+        manageMode = ManageMode.None;
+        actionError = null;
+        actionMessage = null;
 
         try
         {
@@ -746,6 +840,124 @@
     private void CloseAuditModal()
     {
         isModalOpen = false;
+        manageMode = ManageMode.None;
+    }
+
+    // ---- Edit and delete (the "Manage This Report" panel in the popup) ----
+
+    private enum ManageMode { None, Status, Details, Withdraw }
+    private ManageMode manageMode;
+    private bool actionSaving;
+    private string? actionError;
+    private string? actionMessage;
+    private string? pageMessage;          // shown above the list, e.g. after a withdraw
+    private string statusNote = "";
+    private string editSeverity = "";
+    private string editDescription = "";
+
+    private void StartManage(ManageMode mode)
+    {
+        if (selectedReport is null) return;
+        manageMode = mode;
+        actionError = null;
+        actionMessage = null;
+        statusNote = "";
+        editSeverity = selectedReport.SeverityValue.ToString();
+        editDescription = selectedReport.Description;
+    }
+
+    private void CancelManage()
+    {
+        manageMode = ManageMode.None;
+        actionError = null;
+    }
+
+    /// <summary>Edit: one UPDATE request; the database trigger adds the history row.</summary>
+    private async Task ConfirmStatusChangeAsync()
+    {
+        if (selectedReport is null || NextStatus(selectedReport.StatusValue) is not ReportStatus next) return;
+        if (string.IsNullOrWhiteSpace(statusNote))
+        {
+            actionError = "Add a short note for the history, for example \"Crew dispatched\".";
+            return;
+        }
+
+        var note = statusNote.Trim();
+        await RunActionAsync(id => Reports.ChangeStatusAsync(id, next, note), $"Moved to {StatusLabel(next)}. The change was added to the history below.");
+    }
+
+    /// <summary>Edit: corrects the severity and the citizen's description.</summary>
+    private async Task SaveDetailsAsync()
+    {
+        if (!Enum.TryParse<SeverityLevel>(editSeverity, out var level) || !Enum.IsDefined(level))
+        {
+            actionError = "Choose a severity.";
+            return;
+        }
+
+        var description = editDescription.Trim();
+        await RunActionAsync(id => Reports.UpdateDetailsAsync(id, level, description), "Details saved.");
+    }
+
+    /// <summary>Delete (soft): sets deleted_at, so the report leaves the map but stays in the table.</summary>
+    private async Task ConfirmWithdrawAsync()
+    {
+        if (selectedReport is null) return;
+        var ticket = selectedReport.Id;
+        await RunActionAsync(id => Reports.WithdrawAsync(id), $"Report #{ticket} was withdrawn. Its row is still in Supabase with a deleted_at date.", closeAfter: true);
+    }
+
+    /// <summary>Saves one change, then reloads what it affects: the counts, the list and map, and the open popup.</summary>
+    private async Task RunActionAsync(Func<long, Task> saveChange, string doneMessage, bool closeAfter = false)
+    {
+        if (selectedReport is null || actionSaving) return;
+        var reportId = selectedReport.DbId;
+        actionSaving = true;
+        actionError = null;
+        actionMessage = null;
+        pageMessage = null;
+
+        try
+        {
+            await saveChange(reportId);
+        }
+        catch (Exception ex)
+        {
+            actionError = $"The change was not saved: {ex.Message}";
+            actionSaving = false;
+            return;
+        }
+
+        try
+        {
+            var countsTask = Reports.GetStatusCountsAsync();
+            var reportTask = Reports.GetReportAsync(reportId);
+            var historyTask = Reports.GetHistoryAsync(reportId);
+            await Task.WhenAll(countsTask, reportTask, historyTask);
+            statusCounts = countsTask.Result.ToDictionary(row => row.Status, row => row.Total);
+            await ReloadReportsAsync();
+
+            manageMode = ManageMode.None;
+            if (closeAfter || reportTask.Result is not HazardReport fresh)
+            {
+                CloseAuditModal();
+                pageMessage = doneMessage;
+            }
+            else
+            {
+                selectedReport = ToRoadReport(fresh);
+                history = historyTask.Result;
+                actionMessage = doneMessage;
+            }
+        }
+        catch (Exception ex)
+        {
+            actionError = $"Saved, but the page could not refresh: {ex.Message}";
+        }
+        finally
+        {
+            actionSaving = false;
+        }
     }
 
     private async Task FocusMapFromModal(RoadReport report)
@@ -798,7 +1010,10 @@
         DistanceFromCenterKm = r.Latitude is double lat && r.Longitude is double lng
             ? DistanceKm(lat, lng, CenterLat, CenterLng)
             : null,
-        Notes = string.IsNullOrWhiteSpace(r.StatusNote) ? "No inspection notes yet." : r.StatusNote
+        Notes = string.IsNullOrWhiteSpace(r.StatusNote) ? "No inspection notes yet." : r.StatusNote,
+        Description = r.Description,
+        StatusValue = r.Status,
+        SeverityValue = r.Severity
     };
 
     /// <summary>Straight-line distance between two points on Earth, in kilometers.</summary>

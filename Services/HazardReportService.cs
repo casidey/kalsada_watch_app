@@ -150,17 +150,39 @@ public sealed class HazardReportService(Supabase.Client db)
         return response.Models;
     }
 
-    /// <summary>Moves a report to a new status. The database records the change in status_updates.</summary>
+    /// <summary>One active report by id, or null if it does not exist or was withdrawn.</summary>
+    public async Task<HazardReport?> GetReportAsync(long reportId)
+    {
+        var response = await db.From<HazardReport>()
+            .Filter("id", Operator.Equals, reportId)
+            .Filter<string>("deleted_at", Operator.Is, null)
+            .Get();
+        return response.Models.FirstOrDefault();
+    }
+
+    /// <summary>Edit: corrects a report's severity and description.</summary>
+    public async Task UpdateDetailsAsync(long reportId, SeverityLevel severity, string description)
+    {
+        await db.From<HazardReport>()
+            .Filter("id", Operator.Equals, reportId)
+            .Filter<string>("deleted_at", Operator.Is, null)
+            .Set(x => x.Severity, severity)
+            .Set(x => x.Description, description)
+            .Update();
+    }
+
+    /// <summary>Edit: moves a report to a new status. The database records the change in status_updates.</summary>
     public async Task ChangeStatusAsync(long reportId, ReportStatus status, string note)
     {
         await db.From<HazardReport>()
             .Filter("id", Operator.Equals, reportId)
+            .Filter<string>("deleted_at", Operator.Is, null)
             .Set(x => x.Status, status)
             .Set(x => x.StatusNote, note)
             .Update();
     }
 
-    /// <summary>Soft delete: hides the report everywhere but keeps the row and its history.</summary>
+    /// <summary>Delete (soft): hides the report everywhere but keeps the row and its history.</summary>
     public async Task WithdrawAsync(long reportId)
     {
         await db.From<HazardReport>()
